@@ -1,6 +1,5 @@
 // maze.js
-// Plain ES module. No Foundry-specific code.
-// KISS version: shape + active cells + stateByCell + basic wall-chain generation.
+// Plain ES module for building, formatting, cloning, and shuffling maze state.
 
 export const ShapeType = Object.freeze({
   RECTANGLE: "rectangle",
@@ -9,8 +8,8 @@ export const ShapeType = Object.freeze({
 
 export const CellState = Object.freeze({
   OPEN: 0,
-  WALL_LOW: 1,   // X
-  WALL_HIGH: 2   // H
+  WALL_LOW: 1,
+  WALL_HIGH: 2,
 });
 
 function key(x, y) {
@@ -29,15 +28,6 @@ function randomInt(min, max, rng) {
 function pickRandom(items, rng) {
   if (items.length === 0) return null;
   return items[Math.floor(rng() * items.length)];
-}
-
-function shuffle(items, rng) {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
 }
 
 function neighbors4(x, y) {
@@ -62,7 +52,6 @@ function buildActiveCells(shape, width, height) {
   }
 
   if (shape === ShapeType.ELLIPSE) {
-    // Ellipse inscribed in the width/height bounding box.
     const cx = (width - 1) / 2;
     const cy = (height - 1) / 2;
     const rx = Math.max(width / 2, 1);
@@ -72,23 +61,16 @@ function buildActiveCells(shape, width, height) {
       for (let x = 0; x < width; x++) {
         const dx = (x - cx) / rx;
         const dy = (y - cy) / ry;
-        if ((dx * dx) + (dy * dy) <= 1) {
+        if (dx * dx + dy * dy <= 1) {
           activeCells.add(key(x, y));
         }
       }
     }
+
     return activeCells;
   }
 
   throw new Error(`Unsupported shape: ${shape}`);
-}
-
-function isCellActive(activeCells, x, y) {
-  return activeCells.has(key(x, y));
-}
-
-function hasWall(stateByCell, x, y) {
-  return stateByCell.get(key(x, y)) === CellState.WALL;
 }
 
 function canPlaceWallAt(stateByCell, activeCells, x, y, pendingChainKeys = new Set()) {
@@ -98,11 +80,12 @@ function canPlaceWallAt(stateByCell, activeCells, x, y, pendingChainKeys = new S
   if (pendingChainKeys.has(cellKey)) return false;
   if (stateByCell.get(cellKey) !== CellState.OPEN) return false;
 
-  // No cardinal touching with any existing wall outside the pending chain.
   for (const neighbor of neighbors4(x, y)) {
     const neighborKey = key(neighbor.x, neighbor.y);
     if (pendingChainKeys.has(neighborKey)) continue;
-    if (stateByCell.get(neighborKey) === CellState.WALL) {
+
+    const neighborState = stateByCell.get(neighborKey);
+    if (neighborState === CellState.WALL_LOW || neighborState === CellState.WALL_HIGH) {
       return false;
     }
   }
@@ -112,6 +95,7 @@ function canPlaceWallAt(stateByCell, activeCells, x, y, pendingChainKeys = new S
 
 function countOpenNeighbors(activeCells, stateByCell, x, y, pendingChainKeys = new Set()) {
   let count = 0;
+
   for (const neighbor of neighbors4(x, y)) {
     const neighborKey = key(neighbor.x, neighbor.y);
     if (!activeCells.has(neighborKey)) continue;
@@ -119,6 +103,7 @@ function countOpenNeighbors(activeCells, stateByCell, x, y, pendingChainKeys = n
     if (stateByCell.get(neighborKey) !== CellState.OPEN) continue;
     count++;
   }
+
   return count;
 }
 
@@ -129,8 +114,6 @@ function chooseSeedCell(activeCells, stateByCell, rng) {
     if (stateByCell.get(cellKey) !== CellState.OPEN) continue;
 
     const { x, y } = unkey(cellKey);
-
-    // Prefer seeds with room around them.
     if (countOpenNeighbors(activeCells, stateByCell, x, y) >= 1) {
       candidates.push(cellKey);
     }
@@ -160,7 +143,7 @@ function weightedNextStepOptions(chain, activeCells, stateByCell, straightBias) 
       const dx = neighbor.x - last.x;
       const dy = neighbor.y - last.y;
       const sameDirection = dx === lastDir.dx && dy === lastDir.dy;
-      weight = sameDirection ? (1 + straightBias * 3) : 1;
+      weight = sameDirection ? 1 + straightBias * 3 : 1;
     }
 
     options.push({
@@ -200,7 +183,6 @@ function tryBuildChain({
 
   const seed = unkey(seedKey);
   const targetLength = randomInt(minChainLength, maxChainLength, rng);
-
   const chain = [{ x: seed.x, y: seed.y }];
 
   while (chain.length < targetLength) {
@@ -225,9 +207,11 @@ function applyChainToState(stateByCell, chain, wallState) {
 
 function initializeState(activeCells) {
   const stateByCell = new Map();
+
   for (const cellKey of activeCells) {
     stateByCell.set(cellKey, CellState.OPEN);
   }
+
   return stateByCell;
 }
 
@@ -236,14 +220,20 @@ function createRng(seed) {
     return Math.random;
   }
 
-  // Small seeded RNG, enough for this use case.
   let t = seed >>> 0;
+
   return function seededRandom() {
     t += 0x6D2B79F5;
     let r = Math.imul(t ^ (t >>> 15), 1 | t);
     r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+function getAlternateStates(currentState) {
+  return [CellState.OPEN, CellState.WALL_LOW, CellState.WALL_HIGH].filter(
+    (state) => state !== currentState
+  );
 }
 
 export function buildMazeFromSpec(spec = {}) {
@@ -256,7 +246,6 @@ export function buildMazeFromSpec(spec = {}) {
     maxChainLength = 4,
     straightBias = 0.65,
     seed,
-    wallState = CellState.WALL,
     maxPlacementAttempts = 200,
   } = spec;
 
@@ -293,9 +282,7 @@ export function buildMazeFromSpec(spec = {}) {
 
     if (!chain) continue;
 
-    const chainState = rng() < 0.5
-        ? CellState.WALL_LOW
-        : CellState.WALL_HIGH;
+    const chainState = rng() < 0.5 ? CellState.WALL_LOW : CellState.WALL_HIGH;
     applyChainToState(stateByCell, chain, chainState);
     builtChains++;
   }
@@ -313,6 +300,7 @@ export function buildMazeFromSpec(spec = {}) {
       maxChainLength,
       straightBias,
       seed: typeof seed === "number" ? seed : null,
+      maxPlacementAttempts,
     },
   };
 }
@@ -320,10 +308,10 @@ export function buildMazeFromSpec(spec = {}) {
 export function formatMazeAscii(maze, options = {}) {
   const {
     openChar = " ",
-    wallChar = "▣",
-    altWallChar = "□",
+    wallLowChar = "▣",
+    wallHighChar = "□",
     voidChar = "█",
-    } = options;
+  } = options;
 
   const lines = [];
 
@@ -341,12 +329,12 @@ export function formatMazeAscii(maze, options = {}) {
       const state = maze.stateByCell.get(cellKey);
 
       if (state === CellState.WALL_LOW) {
-        line += wallChar;
-        } else if (state === CellState.WALL_HIGH) {
-        line += altWallChar;
-        } else {
+        line += wallLowChar;
+      } else if (state === CellState.WALL_HIGH) {
+        line += wallHighChar;
+      } else {
         line += openChar;
-        }
+      }
     }
 
     lines.push(line);
@@ -359,7 +347,58 @@ export function printMazeAscii(maze, options = {}) {
   console.log(formatMazeAscii(maze, options));
 }
 
+export function cloneMaze(maze) {
+  return {
+    shape: maze.shape,
+    width: maze.width,
+    height: maze.height,
+    activeCells: new Set(maze.activeCells),
+    stateByCell: new Map(maze.stateByCell),
+    meta: { ...maze.meta },
+  };
+}
+
+export function shuffleMazeCells(maze, options = {}) {
+  const {
+    seed,
+    minChangeChance = 0,
+    maxChangeChance = 25,
+  } = options;
+
+  if (minChangeChance < 0 || minChangeChance > 100 || maxChangeChance < 0 || maxChangeChance > 100) {
+    throw new Error("Change chances must be between 0 and 100");
+  }
+
+  if (maxChangeChance < minChangeChance) {
+    throw new Error("maxChangeChance must be >= minChangeChance");
+  }
+
+  const rng = createRng(seed);
+  const shuffled = cloneMaze(maze);
+  const changeChance = randomInt(minChangeChance, maxChangeChance, rng);
+
+  for (const cellKey of shuffled.activeCells) {
+    const currentState = shuffled.stateByCell.get(cellKey);
+    const roll = rng() * 100;
+
+    if (roll >= changeChance) continue;
+
+    const alternateStates = getAlternateStates(currentState);
+    const nextState = pickRandom(alternateStates, rng);
+    shuffled.stateByCell.set(cellKey, nextState);
+  }
+
+  shuffled.meta = {
+    ...shuffled.meta,
+    lastShuffleChance: changeChance,
+    lastShuffleSeed: typeof seed === "number" ? seed : null,
+    minChangeChance,
+    maxChangeChance,
+  };
+
+  return shuffled;
+}
+
 export function shuffleMazeFromSpec(spec = {}) {
-  // For now, KISS: reshuffle = rebuild from the same kind of spec.
   return buildMazeFromSpec(spec);
 }
