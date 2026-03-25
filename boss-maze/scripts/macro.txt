@@ -1,0 +1,400 @@
+// ===== BOSS MAZE PRESET EDITOR =====
+// Click allowed non-column cells to cycle:
+// unset -> 1 (low wall) -> 2 (high wall) -> unset
+//
+// Buttons:
+// - Export JSON
+// - Reset Preset
+// - Stop Editor
+
+(async () => {
+  const gridSize = canvas.scene.grid.size || 50;
+
+  // ---------- ASSET PATHS ----------
+  // Change these if your actual paths differ.
+  const ASSET_PATHS = {
+    column: "assets/ColeDMAssets/BossAssets/Column.png",
+    lowWall: "assets/ColeDMAssets/BossAssets/ShortWall.png",
+    highWall: "assets/ColeDMAssets/BossAssets/TallWall.png"
+  };
+
+  // ---------- INLINE TEST DATA ----------
+  const arenaData = {
+    allowedCells: [
+      "8,1","9,1","10,1","11,1",
+      "6,2","7,2","8,2","9,2","10,2","11,2","12,2","13,2",
+      "4,3","5,3","6,3","7,3","8,3","9,3","10,3","11,3","12,3","13,3","14,3","15,3",
+      "3,4","4,4","5,4","6,4","7,4","8,4","9,4","10,4","11,4","12,4","13,4","14,4","15,4","16,4",
+      "3,5","4,5","5,5","6,5","7,5","8,5","9,5","10,5","11,5","12,5","13,5","14,5","15,5","16,5",
+      "2,6","3,6","4,6","5,6","6,6","7,6","8,6","9,6","10,6","11,6","12,6","13,6","14,6","15,6","16,6","17,6",
+      "2,7","3,7","4,7","5,7","6,7","7,7","8,7","9,7","10,7","11,7","12,7","13,7","14,7","15,7","16,7","17,7",
+      "1,8","2,8","3,8","4,8","5,8","6,8","7,8","8,8","9,8","10,8","11,8","12,8","13,8","14,8","15,8","16,8","17,8","18,8",
+      "1,9","2,9","3,9","4,9","5,9","6,9","7,9","8,9","9,9","10,9","11,9","12,9","13,9","14,9","15,9","16,9","17,9","18,9",
+      "1,10","2,10","3,10","4,10","5,10","6,10","7,10","8,10","9,10","10,10","11,10","12,10","13,10","14,10","15,10","16,10","17,10","18,10",
+      "1,11","2,11","3,11","4,11","5,11","6,11","7,11","8,11","9,11","10,11","11,11","12,11","13,11","14,11","15,11","16,11","17,11","18,11",
+      "2,12","3,12","4,12","5,12","6,12","7,12","8,12","9,12","10,12","11,12","12,12","13,12","14,12","15,12","16,12","17,12",
+      "2,13","3,13","4,13","5,13","6,13","7,13","8,13","9,13","10,13","11,13","12,13","13,13","14,13","15,13","16,13","17,13",
+      "3,14","4,14","5,14","6,14","7,14","8,14","9,14","10,14","11,14","12,14","13,14","14,14","15,14","16,14",
+      "3,15","4,15","5,15","6,15","7,15","8,15","9,15","10,15","11,15","12,15","13,15","14,15","15,15","16,15",
+      "4,16","5,16","6,16","7,16","8,16","9,16","10,16","11,16","12,16","13,16","14,16","15,16",
+      "6,17","7,17","8,17","9,17","10,17","11,17","12,17","13,17",
+      "8,18","9,18","10,18","11,18"
+    ],
+    columnCells: [
+      "8,5","11,5","5,8","14,8","14,11","5,11","8,14","11,14"
+    ]
+  };
+
+  // Put only 1 and 2 in here if you want seed data.
+  const initialPresetData = {
+    "stateByCell": {
+        "8,1": 2,
+        "9,1": 2,
+        "10,1": 2,
+        "11,1": 2,
+        "6,2": 2,
+        "7,2": 2,
+        "12,2": 2,
+        "13,2": 2,
+        "4,3": 2,
+        "5,3": 2,
+        "7,3": 1,
+        "8,3": 1,
+        "9,3": 1,
+        "10,3": 1,
+        "11,3": 1,
+        "12,3": 1,
+        "14,3": 2,
+        "15,3": 2,
+        "3,4": 2,
+        "6,4": 1,
+        "13,4": 1,
+        "16,4": 2,
+        "3,5": 2,
+        "5,5": 1,
+        "14,5": 1,
+        "16,5": 2,
+        "2,6": 2,
+        "4,6": 1,
+        "7,6": 2,
+        "12,6": 2,
+        "15,6": 1,
+        "17,6": 2,
+        "2,7": 2,
+        "3,7": 1,
+        "6,7": 2,
+        "7,7": 1,
+        "9,7": 2,
+        "10,7": 2,
+        "12,7": 1,
+        "13,7": 2,
+        "16,7": 1,
+        "17,7": 2,
+        "1,8": 2,
+        "3,8": 1,
+        "16,8": 1,
+        "18,8": 2,
+        "1,9": 2,
+        "3,9": 1,
+        "7,9": 2,
+        "12,9": 2,
+        "16,9": 1,
+        "18,9": 2,
+        "1,10": 2,
+        "3,10": 1,
+        "7,10": 2,
+        "12,10": 2,
+        "16,10": 1,
+        "18,10": 2,
+        "1,11": 2,
+        "3,11": 1,
+        "16,11": 1,
+        "18,11": 2,
+        "2,12": 2,
+        "3,12": 1,
+        "6,12": 2,
+        "7,12": 1,
+        "9,12": 2,
+        "10,12": 2,
+        "12,12": 1,
+        "13,12": 2,
+        "16,12": 1,
+        "17,12": 2,
+        "2,13": 2,
+        "4,13": 1,
+        "7,13": 2,
+        "12,13": 2,
+        "15,13": 1,
+        "17,13": 2,
+        "3,14": 2,
+        "5,14": 1,
+        "14,14": 1,
+        "16,14": 2,
+        "3,15": 2,
+        "6,15": 1,
+        "13,15": 1,
+        "16,15": 2,
+        "4,16": 2,
+        "5,16": 2,
+        "7,16": 1,
+        "8,16": 1,
+        "9,16": 1,
+        "10,16": 1,
+        "11,16": 1,
+        "12,16": 1,
+        "14,16": 2,
+        "15,16": 2,
+        "6,17": 2,
+        "7,17": 2,
+        "12,17": 2,
+        "13,17": 2,
+        "8,18": 2,
+        "9,18": 2,
+        "10,18": 2,
+        "11,18": 2
+      }
+  };
+
+  // ---------- CLEAN UP EXISTING EDITOR ----------
+  if (globalThis.bossMazePresetEditor?.destroy) {
+    globalThis.bossMazePresetEditor.destroy();
+  }
+
+  function keyToXY(key) {
+    const [x, y] = key.split(",").map(Number);
+    return { x, y };
+  }
+
+  function clonePresetData(data) {
+    return {
+      stateByCell: { ...(data?.stateByCell ?? {}) }
+    };
+  }
+
+  function sortStateByCell(stateByCell) {
+    return Object.fromEntries(
+      Object.entries(stateByCell).sort((a, b) => {
+        const [ax, ay] = a[0].split(",").map(Number);
+        const [bx, by] = b[0].split(",").map(Number);
+        return ay - by || ax - bx;
+      })
+    );
+  }
+
+  function exportPresetJson(stateByCell) {
+    const cleaned = {};
+    for (const [key, value] of Object.entries(stateByCell)) {
+      if (value === 1 || value === 2) cleaned[key] = value;
+    }
+
+    const payload = {
+      stateByCell: sortStateByCell(cleaned)
+    };
+
+    console.log("presetData =", payload);
+    console.log(JSON.stringify(payload, null, 2));
+    ui.notifications.info("Preset JSON printed to console.");
+  }
+
+  function nextState(current) {
+    if (current === undefined) return 1;
+    if (current === 1) return 2;
+    return undefined;
+  }
+
+  async function loadEditorTexture(path) {
+    try {
+      return await loadTexture(path);
+    } catch (err) {
+      console.error(`Failed to load texture: ${path}`, err);
+      ui.notifications.error(`Failed to load texture: ${path}`);
+      throw err;
+    }
+  }
+
+  const textures = {
+    column: await loadEditorTexture(ASSET_PATHS.column),
+    lowWall: await loadEditorTexture(ASSET_PATHS.lowWall),
+    highWall: await loadEditorTexture(ASSET_PATHS.highWall)
+  };
+
+  function makeSprite(texture) {
+    const sprite = new PIXI.Sprite(texture);
+    sprite.width = gridSize;
+    sprite.height = gridSize;
+    sprite.x = 0;
+    sprite.y = 0;
+    sprite.visible = false;
+    return sprite;
+  }
+
+  class BossMazePresetEditor {
+    constructor(arenaData, initialPresetData, textures) {
+      this.allowedSet = new Set(arenaData.allowedCells);
+      this.columnSet = new Set(arenaData.columnCells);
+      this.presetData = clonePresetData(initialPresetData);
+      this.textures = textures;
+
+      this.root = new PIXI.Container();
+      this.root.sortableChildren = true;
+      this.root.eventMode = "passive";
+
+      this.cellDisplays = new Map();
+      this.controlsElement = null;
+    }
+
+    start() {
+      canvas.stage.addChild(this.root);
+      this.buildCells();
+      this.renderAll();
+      this.buildControls();
+      ui.notifications.info("Boss maze preset editor started.");
+    }
+
+    buildCells() {
+      for (const cellKey of this.allowedSet) {
+        const { x, y } = keyToXY(cellKey);
+
+        const container = new PIXI.Container();
+        container.position.set(x * gridSize, y * gridSize);
+        container.eventMode = "static";
+        container.cursor = this.columnSet.has(cellKey) ? "default" : "pointer";
+
+        const sprite = makeSprite(this.textures.lowWall);
+
+        container.addChild(sprite);
+
+        if (!this.columnSet.has(cellKey)) {
+          container.on("pointertap", () => {
+            const current = this.presetData.stateByCell[cellKey];
+            const next = nextState(current);
+
+            if (next === undefined) {
+              delete this.presetData.stateByCell[cellKey];
+            } else {
+              this.presetData.stateByCell[cellKey] = next;
+            }
+
+            this.renderCell(cellKey);
+          });
+        }
+
+        this.root.addChild(container);
+        this.cellDisplays.set(cellKey, { container, sprite });
+      }
+    }
+
+    renderCell(cellKey) {
+      const display = this.cellDisplays.get(cellKey);
+      if (!display) return;
+
+      const { sprite } = display;
+      const state = this.presetData.stateByCell[cellKey];
+      const isColumn = this.columnSet.has(cellKey);
+
+      if (isColumn) {
+        sprite.texture = this.textures.column;
+        sprite.width = gridSize;
+        sprite.height = gridSize;
+        sprite.visible = true;
+        return;
+      }
+
+      if (state === 1) {
+        sprite.texture = this.textures.lowWall;
+        sprite.width = gridSize;
+        sprite.height = gridSize;
+        sprite.visible = true;
+        return;
+      }
+
+      if (state === 2) {
+        sprite.texture = this.textures.highWall;
+        sprite.width = gridSize;
+        sprite.height = gridSize;
+        sprite.visible = true;
+        return;
+      }
+
+      // OPEN = render nothing
+      sprite.visible = false;
+    }
+
+    renderAll() {
+      for (const cellKey of this.allowedSet) {
+        this.renderCell(cellKey);
+      }
+    }
+
+    resetPreset() {
+      this.presetData.stateByCell = {};
+      this.renderAll();
+      ui.notifications.info("Preset cleared.");
+    }
+
+    buildControls() {
+      const old = document.getElementById("boss-maze-preset-controls");
+      if (old) old.remove();
+
+      const html = document.createElement("div");
+      html.id = "boss-maze-preset-controls";
+      html.style.position = "fixed";
+      html.style.top = "120px";
+      html.style.right = "20px";
+      html.style.zIndex = "10000";
+      html.style.display = "flex";
+      html.style.flexDirection = "column";
+      html.style.gap = "8px";
+      html.style.padding = "10px";
+      html.style.background = "rgba(0,0,0,0.85)";
+      html.style.border = "1px solid #666";
+      html.style.borderRadius = "8px";
+
+      const makeButton = (text, onClick) => {
+        const btn = document.createElement("button");
+        btn.textContent = text;
+        btn.style.padding = "8px 10px";
+        btn.style.cursor = "pointer";
+        btn.addEventListener("click", onClick);
+        return btn;
+      };
+
+      html.appendChild(makeButton("Export JSON", () => {
+        exportPresetJson(this.presetData.stateByCell);
+      }));
+
+      html.appendChild(makeButton("Reset Preset", () => {
+        this.resetPreset();
+      }));
+
+      html.appendChild(makeButton("Stop Editor", () => {
+        this.destroy();
+      }));
+
+      document.body.appendChild(html);
+      this.controlsElement = html;
+    }
+
+    destroy() {
+      if (this.controlsElement?.parentNode) {
+        this.controlsElement.parentNode.removeChild(this.controlsElement);
+      }
+
+      if (this.root?.parent) {
+        this.root.parent.removeChild(this.root);
+      }
+
+      this.root?.destroy({ children: true });
+
+      if (globalThis.bossMazePresetEditor === this) {
+        delete globalThis.bossMazePresetEditor;
+      }
+
+      ui.notifications.info("Boss maze preset editor stopped.");
+    }
+  }
+
+  const editor = new BossMazePresetEditor(arenaData, initialPresetData, textures);
+  globalThis.bossMazePresetEditor = editor;
+  editor.start();
+})();

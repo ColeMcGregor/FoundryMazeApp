@@ -1,0 +1,12 @@
+{
+  "id": "boss-maze",
+  "title": "Boss Maze",
+  "description": "Maze system for boss arena",
+  "version": "1.0.0",
+  "authors": [],
+  "esmodules": [
+    "scripts/main.js"
+  ],
+  "minimumCoreVersion": "11",
+  "compatibleCoreVersion": "12"
+}
