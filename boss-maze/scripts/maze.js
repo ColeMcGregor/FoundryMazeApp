@@ -1,404 +1,469 @@
-// maze.js
-// Plain ES module for building, formatting, cloning, and shuffling maze state.
-
-export const ShapeType = Object.freeze({
-  RECTANGLE: "rectangle",
-  ELLIPSE: "ellipse",
-});
-
-export const CellState = Object.freeze({
+export const CELL_STATES = Object.freeze({
   OPEN: 0,
   WALL_LOW: 1,
-  WALL_HIGH: 2,
+  WALL_HIGH: 2
 });
 
-function key(x, y) {
+const STORED_STATES = new Set([
+  CELL_STATES.WALL_LOW,
+  CELL_STATES.WALL_HIGH
+]);
+
+const TAU = Math.PI * 2;
+
+// ---------- BASIC HELPERS ----------
+
+function cloneStateByCell(stateByCell = {}) {
+  return { ...stateByCell };
+}
+
+function keyFromXY(x, y) {
   return `${x},${y}`;
 }
 
-function unkey(cellKey) {
-  const [x, y] = cellKey.split(",").map(Number);
+function parseKey(key) {
+  const [x, y] = String(key).split(",").map(Number);
   return { x, y };
 }
 
-function randomInt(min, max, rng) {
-  return Math.floor(rng() * (max - min + 1)) + min;
+function sortEntriesByRowThenCol(entries) {
+  return [...entries].sort((a, b) => {
+    const aPos = parseKey(a[0]);
+    const bPos = parseKey(b[0]);
+    return aPos.y - bPos.y || aPos.x - bPos.x;
+  });
 }
 
-function pickRandom(items, rng) {
-  if (items.length === 0) return null;
-  return items[Math.floor(rng() * items.length)];
+function normalizeAngle(angle) {
+  let out = angle % TAU;
+  if (out < 0) out += TAU;
+  return out;
 }
 
-function neighbors4(x, y) {
-  return [
-    { x: x + 1, y },
-    { x: x - 1, y },
-    { x, y: y + 1 },
-    { x, y: y - 1 },
-  ];
+function angularDistance(a, b) {
+  const diff = Math.abs(normalizeAngle(a) - normalizeAngle(b));
+  return Math.min(diff, TAU - diff);
 }
 
-function buildActiveCells(shape, width, height) {
-  const activeCells = new Set();
+function mod(n, m) {
+  return ((n % m) + m) % m;
+}
 
-  if (shape === ShapeType.RECTANGLE) {
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        activeCells.add(key(x, y));
-      }
-    }
-    return activeCells;
+// Simple deterministic hash -> [0, 1)
+function hashToUnitInterval(input) {
+  let hash = 2166136261;
+
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
   }
 
-  if (shape === ShapeType.ELLIPSE) {
-    const cx = (width - 1) / 2;
-    const cy = (height - 1) / 2;
-    const rx = Math.max(width / 2, 1);
-    const ry = Math.max(height / 2, 1);
+  // Force unsigned 32-bit, then normalize
+  return (hash >>> 0) / 4294967295;
+}
 
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const dx = (x - cx) / rx;
-        const dy = (y - cy) / ry;
-        if (dx * dx + dy * dy <= 1) {
-          activeCells.add(key(x, y));
+function deterministicWallHeight(patternName, x, y, turn) {
+  const roll = hashToUnitInterval(`${patternName}|${x}|${y}|${turn}`);
+  return roll < 0.5 ? CELL_STATES.WALL_LOW : CELL_STATES.WALL_HIGH;
+}
+
+function getCellCenter(x, y) {
+  return {
+    px: x + 0.5,
+    py: y + 0.5
+  };
+}
+
+// Uses standard mathematical orientation:
+// +x right, +y up, angle increases counterclockwise
+function getPolarFromArenaCenter(x, y, cx = 9.5, cy = 9.5) {
+  const { px, py } = getCellCenter(x, y);
+  const dx = px - cx;
+  const dy = cy - py; // flip screen Y so radians behave normally
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const angle = normalizeAngle(Math.atan2(dy, dx));
+  return { dx, dy, dist, angle };
+}
+
+// ---------- NORMALIZATION ----------
+
+function normalizeArena(rawArena = {}) {
+  const allowedCells = new Set(Array.isArray(rawArena.allowedCells) ? rawArena.allowedCells : []);
+  const rawColumnCells = Array.isArray(rawArena.columnCells) ? rawArena.columnCells : [];
+
+  const columnCells = new Set(
+    rawColumnCells.filter((cellKey) => allowedCells.has(cellKey))
+  );
+
+  const arena = {
+    allowedCells,
+    columnCells
+  };
+
+  if (Number.isInteger(rawArena.width)) arena.width = rawArena.width;
+  if (Number.isInteger(rawArena.height)) arena.height = rawArena.height;
+
+  return arena;
+}
+
+function normalizeStateByCell(arena, rawStateByCell = {}) {
+  const next = {};
+
+  for (const [cellKey, value] of Object.entries(rawStateByCell)) {
+    if (!arena.allowedCells.has(cellKey)) continue;
+    if (arena.columnCells.has(cellKey)) continue;
+    if (!STORED_STATES.has(value)) continue;
+
+    next[cellKey] = value;
+  }
+
+  return Object.fromEntries(sortEntriesByRowThenCol(Object.entries(next)));
+}
+
+function normalizePresets(rawPresets = {}) {
+  const maybePresets = rawPresets.presets && typeof rawPresets.presets === "object"
+    ? rawPresets.presets
+    : rawPresets;
+
+  const presets = {};
+
+  for (const [name, preset] of Object.entries(maybePresets)) {
+    if (!preset || typeof preset !== "object") continue;
+    const stateByCell = preset.stateByCell;
+    if (!stateByCell || typeof stateByCell !== "object") continue;
+
+    presets[name] = {
+      stateByCell: cloneStateByCell(stateByCell)
+    };
+  }
+
+  return presets;
+}
+
+// ---------- STATE ----------
+
+function createEmptyState() {
+  return {
+    stateByCell: {}
+  };
+}
+
+function cloneState(state = {}) {
+  return {
+    stateByCell: cloneStateByCell(state.stateByCell)
+  };
+}
+
+function getCellState(currentState, cellKey) {
+  return currentState.stateByCell[cellKey] ?? CELL_STATES.OPEN;
+}
+
+function isAllowedCell(arena, cellKey) {
+  return arena.allowedCells.has(cellKey);
+}
+
+function isColumnCell(arena, cellKey) {
+  return arena.columnCells.has(cellKey);
+}
+
+function isMutableCell(arena, cellKey) {
+  return isAllowedCell(arena, cellKey) && !isColumnCell(arena, cellKey);
+}
+
+function validateStrategyResult(arena, result) {
+  if (!result || typeof result !== "object") {
+    return createEmptyState();
+  }
+
+  return {
+    stateByCell: normalizeStateByCell(arena, result.stateByCell)
+  };
+}
+
+// ---------- STRATEGIES ----------
+
+function buildPresetStrategy(presetName) {
+  return {
+    randomEligible: false,
+    run: ({ arena, presets }) => {
+      const preset = presets[presetName];
+      if (!preset) {
+        return createEmptyState();
+      }
+
+      return {
+        stateByCell: normalizeStateByCell(arena, preset.stateByCell)
+      };
+    }
+  };
+}
+
+function buildRotatingSunburstStrategy({
+  spokeCount = 8,
+  step = Math.PI / 16,
+  halfWidth = Math.PI / 25,
+  centerExclusionRadius = 1.25,
+  cx = 10,
+  cy = 10
+} = {}) {
+  const baseSpokeAngles = [];
+  for (let i = 0; i < spokeCount; i++) {
+    baseSpokeAngles.push((TAU / spokeCount) * i);
+  }
+
+  return {
+    randomEligible: true,
+    run: ({ arena, turn = 0 }) => {
+      const stateByCell = {};
+      const phase = turn * step;
+
+      for (const cellKey of arena.allowedCells) {
+        if (arena.columnCells.has(cellKey)) continue;
+
+        const { x, y } = parseKey(cellKey);
+        const { dist, angle } = getPolarFromArenaCenter(x, y, cx, cy);
+
+        if (dist < centerExclusionRadius) continue;
+
+        let active = false;
+
+        for (const baseAngle of baseSpokeAngles) {
+          const spokeAngle = normalizeAngle(baseAngle + phase); // counterclockwise rotation
+          if (angularDistance(angle, spokeAngle) <= halfWidth) {
+            active = true;
+            break;
+          }
         }
+
+        if (!active) continue;
+
+        stateByCell[cellKey] = deterministicWallHeight("RotatingSunburst", x, y, turn);
       }
+
+      return { stateByCell };
     }
-
-    return activeCells;
-  }
-
-  throw new Error(`Unsupported shape: ${shape}`);
+  };
 }
 
-function canPlaceWallAt(stateByCell, activeCells, x, y, pendingChainKeys = new Set()) {
-  const cellKey = key(x, y);
+function buildRippleStrategy({
+  spacing = 3,
+  centerExclusionRadius = 0,
+  cx = 10,
+  cy = 10
+} = {}) {
+  return {
+    randomEligible: true,
+    run: ({ arena, turn = 0 }) => {
+      const stateByCell = {};
 
-  if (!activeCells.has(cellKey)) return false;
-  if (pendingChainKeys.has(cellKey)) return false;
-  if (stateByCell.get(cellKey) !== CellState.OPEN) return false;
+      for (const cellKey of arena.allowedCells) {
+        if (arena.columnCells.has(cellKey)) continue;
 
-  for (const neighbor of neighbors4(x, y)) {
-    const neighborKey = key(neighbor.x, neighbor.y);
-    if (pendingChainKeys.has(neighborKey)) continue;
+        const { x, y } = parseKey(cellKey);
+        const { dist } = getPolarFromArenaCenter(x, y, cx, cy);
 
-    const neighborState = stateByCell.get(neighborKey);
-    if (neighborState === CellState.WALL_LOW || neighborState === CellState.WALL_HIGH) {
-      return false;
+        if (dist < centerExclusionRadius) continue;
+
+        const band = Math.floor(dist);
+        const active = mod(band - turn, spacing) === 0;
+
+        if (!active) continue;
+
+        stateByCell[cellKey] = deterministicWallHeight("Ripple", x, y, turn);
+      }
+
+      return { stateByCell };
     }
+  };
+}
+
+// ---------- RANDOM / GENERIC HELPERS ----------
+
+function randomChoice(items) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function getMutableCellKeys(arena) {
+  return [...arena.allowedCells].filter((cellKey) => !arena.columnCells.has(cellKey));
+}
+
+function stateOptionsExcluding(current) {
+  return [CELL_STATES.OPEN, CELL_STATES.WALL_LOW, CELL_STATES.WALL_HIGH]
+    .filter((value) => value !== current);
+}
+
+function randomEligibleStrategyNames(strategies) {
+  return Object.entries(strategies)
+    .filter(([, strategy]) => strategy?.randomEligible === true)
+    .map(([name]) => name);
+}
+
+// ---------- PUBLIC API ----------
+
+export function createArena(rawArena) {
+  return normalizeArena(rawArena);
+}
+
+export function createPresets(rawPresets) {
+  return normalizePresets(rawPresets);
+}
+
+export function createState(rawState = {}) {
+  return {
+    stateByCell: cloneStateByCell(rawState.stateByCell)
+  };
+}
+
+export function createContext({ arena, currentState, presets, turn = 0 }) {
+  return {
+    arena,
+    currentState: cloneState(currentState),
+    presets,
+    turn
+  };
+}
+
+export function createStrategies(presets = {}) {
+  const strategies = {};
+
+  for (const presetName of Object.keys(presets)) {
+    strategies[presetName] = buildPresetStrategy(presetName);
   }
+
+  strategies.RotatingSunburst = buildRotatingSunburstStrategy();
+  strategies.Ripple = buildRippleStrategy();
+
+  return strategies;
+}
+
+export function registerStrategy(strategies, name, strategy, { overwrite = false } = {}) {
+  if (!strategies || typeof strategies !== "object") return false;
+  if (typeof name !== "string" || !name.trim()) return false;
+  if (!strategy || typeof strategy.run !== "function") return false;
+  if (!overwrite && strategies[name]) return false;
+
+  strategies[name] = {
+    randomEligible: strategy.randomEligible === true,
+    run: strategy.run
+  };
 
   return true;
 }
 
-function countOpenNeighbors(activeCells, stateByCell, x, y, pendingChainKeys = new Set()) {
-  let count = 0;
-
-  for (const neighbor of neighbors4(x, y)) {
-    const neighborKey = key(neighbor.x, neighbor.y);
-    if (!activeCells.has(neighborKey)) continue;
-    if (pendingChainKeys.has(neighborKey)) continue;
-    if (stateByCell.get(neighborKey) !== CellState.OPEN) continue;
-    count++;
-  }
-
-  return count;
+export function getStrategyNames(strategies) {
+  return Object.keys(strategies ?? {});
 }
 
-function chooseSeedCell(activeCells, stateByCell, rng) {
-  const candidates = [];
-
-  for (const cellKey of activeCells) {
-    if (stateByCell.get(cellKey) !== CellState.OPEN) continue;
-
-    const { x, y } = unkey(cellKey);
-    if (countOpenNeighbors(activeCells, stateByCell, x, y) >= 1) {
-      candidates.push(cellKey);
-    }
-  }
-
-  return pickRandom(candidates, rng);
+export function getCell(currentState, x, y) {
+  return getCellState(currentState, keyFromXY(x, y));
 }
 
-function weightedNextStepOptions(chain, activeCells, stateByCell, straightBias) {
-  const options = [];
-  const last = chain[chain.length - 1];
-  const pendingChainKeys = new Set(chain.map(({ x, y }) => key(x, y)));
+export function setCell(arena, currentState, x, y, newValue) {
+  const cellKey = keyFromXY(x, y);
+  if (!isMutableCell(arena, cellKey)) return cloneState(currentState);
 
-  let lastDir = null;
-  if (chain.length >= 2) {
-    const prev = chain[chain.length - 2];
-    lastDir = { dx: last.x - prev.x, dy: last.y - prev.y };
+  const next = cloneState(currentState);
+
+  if (!STORED_STATES.has(newValue)) {
+    delete next.stateByCell[cellKey];
+  } else {
+    next.stateByCell[cellKey] = newValue;
   }
 
-  for (const neighbor of neighbors4(last.x, last.y)) {
-    if (!canPlaceWallAt(stateByCell, activeCells, neighbor.x, neighbor.y, pendingChainKeys)) {
-      continue;
-    }
-
-    let weight = 1;
-    if (lastDir) {
-      const dx = neighbor.x - last.x;
-      const dy = neighbor.y - last.y;
-      const sameDirection = dx === lastDir.dx && dy === lastDir.dy;
-      weight = sameDirection ? 1 + straightBias * 3 : 1;
-    }
-
-    options.push({
-      x: neighbor.x,
-      y: neighbor.y,
-      weight,
-    });
-  }
-
-  return options;
+  next.stateByCell = normalizeStateByCell(arena, next.stateByCell);
+  return next;
 }
 
-function pickWeighted(options, rng) {
-  if (options.length === 0) return null;
+export function cycleCell(arena, currentState, x, y) {
+  const cellKey = keyFromXY(x, y);
+  if (!isMutableCell(arena, cellKey)) return cloneState(currentState);
 
-  const total = options.reduce((sum, option) => sum + option.weight, 0);
-  let roll = rng() * total;
+  const current = getCellState(currentState, cellKey);
 
-  for (const option of options) {
-    roll -= option.weight;
-    if (roll <= 0) return option;
+  if (current === CELL_STATES.OPEN) {
+    return setCell(arena, currentState, x, y, CELL_STATES.WALL_LOW);
   }
 
-  return options[options.length - 1];
+  if (current === CELL_STATES.WALL_LOW) {
+    return setCell(arena, currentState, x, y, CELL_STATES.WALL_HIGH);
+  }
+
+  return setCell(arena, currentState, x, y, CELL_STATES.OPEN);
 }
 
-function tryBuildChain({
-  activeCells,
-  stateByCell,
-  minChainLength,
-  maxChainLength,
-  straightBias,
-  rng,
-}) {
-  const seedKey = chooseSeedCell(activeCells, stateByCell, rng);
-  if (!seedKey) return null;
-
-  const seed = unkey(seedKey);
-  const targetLength = randomInt(minChainLength, maxChainLength, rng);
-  const chain = [{ x: seed.x, y: seed.y }];
-
-  while (chain.length < targetLength) {
-    const options = weightedNextStepOptions(chain, activeCells, stateByCell, straightBias);
-    const next = pickWeighted(options, rng);
-    if (!next) break;
-    chain.push({ x: next.x, y: next.y });
-  }
-
-  if (chain.length < minChainLength) {
-    return null;
-  }
-
-  return chain;
+export function clearState() {
+  return createEmptyState();
 }
 
-function applyChainToState(stateByCell, chain, wallState) {
-  for (const cell of chain) {
-    stateByCell.set(key(cell.x, cell.y), wallState);
-  }
-}
-
-function initializeState(activeCells) {
-  const stateByCell = new Map();
-
-  for (const cellKey of activeCells) {
-    stateByCell.set(cellKey, CellState.OPEN);
+export function build({ arena, currentState, presets, strategies, turn = 0 }, strategyName) {
+  if (!strategies || typeof strategies !== "object") {
+    return cloneState(currentState);
   }
 
-  return stateByCell;
-}
-
-function createRng(seed) {
-  if (typeof seed !== "number") {
-    return Math.random;
+  if (strategyName === "Random") {
+    const eligibleNames = randomEligibleStrategyNames(strategies);
+    const chosen = randomChoice(eligibleNames);
+    if (!chosen) return cloneState(currentState);
+    return build({ arena, currentState, presets, strategies, turn }, chosen);
   }
 
-  let t = seed >>> 0;
+  const strategy = strategies[strategyName];
+  if (!strategy || typeof strategy.run !== "function") {
+    return cloneState(currentState);
+  }
 
-  return function seededRandom() {
-    t += 0x6D2B79F5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function getAlternateStates(currentState) {
-  return [CellState.OPEN, CellState.WALL_LOW, CellState.WALL_HIGH].filter(
-    (state) => state !== currentState
+  const result = strategy.run(
+    createContext({ arena, currentState, presets, turn })
   );
+
+  return validateStrategyResult(arena, result);
 }
 
-export function buildMazeFromSpec(spec = {}) {
-  const {
-    shape = ShapeType.ELLIPSE,
-    width = 18,
-    height = 18,
-    chainCount = 6,
-    minChainLength = 2,
-    maxChainLength = 4,
-    straightBias = 0.65,
-    seed,
-    maxPlacementAttempts = 200,
-  } = spec;
+export function shuffle(arena, currentState) {
+  const next = cloneState(currentState);
+  const mutableCellKeys = getMutableCellKeys(arena);
 
-  if (!Object.values(ShapeType).includes(shape)) {
-    throw new Error(`Invalid shape: ${shape}`);
-  }
+  const minChangeChance = 0.08;
+  const maxChangeChance = 0.18;
+  const changeChance = minChangeChance + Math.random() * (maxChangeChance - minChangeChance);
 
-  if (width < 1 || height < 1) {
-    throw new Error("width and height must be >= 1");
-  }
+  for (const cellKey of mutableCellKeys) {
+    if (Math.random() >= changeChance) continue;
 
-  if (minChainLength < 1 || maxChainLength < minChainLength) {
-    throw new Error("Invalid chain length settings");
-  }
+    const current = getCellState(next, cellKey);
+    const options = stateOptionsExcluding(current);
+    const chosen = randomChoice(options);
 
-  const rng = createRng(seed);
-  const activeCells = buildActiveCells(shape, width, height);
-  const stateByCell = initializeState(activeCells);
-
-  let builtChains = 0;
-  let attempts = 0;
-
-  while (builtChains < chainCount && attempts < maxPlacementAttempts) {
-    attempts++;
-
-    const chain = tryBuildChain({
-      activeCells,
-      stateByCell,
-      minChainLength,
-      maxChainLength,
-      straightBias,
-      rng,
-    });
-
-    if (!chain) continue;
-
-    const chainState = rng() < 0.5 ? CellState.WALL_LOW : CellState.WALL_HIGH;
-    applyChainToState(stateByCell, chain, chainState);
-    builtChains++;
-  }
-
-  return {
-    shape,
-    width,
-    height,
-    activeCells,
-    stateByCell,
-    meta: {
-      chainCountRequested: chainCount,
-      chainCountBuilt: builtChains,
-      minChainLength,
-      maxChainLength,
-      straightBias,
-      seed: typeof seed === "number" ? seed : null,
-      maxPlacementAttempts,
-    },
-  };
-}
-
-export function formatMazeAscii(maze, options = {}) {
-  const {
-    openChar = " ",
-    wallLowChar = "▣",
-    wallHighChar = "□",
-    voidChar = "█",
-  } = options;
-
-  const lines = [];
-
-  for (let y = 0; y < maze.height; y++) {
-    let line = "";
-
-    for (let x = 0; x < maze.width; x++) {
-      const cellKey = key(x, y);
-
-      if (!maze.activeCells.has(cellKey)) {
-        line += voidChar;
-        continue;
-      }
-
-      const state = maze.stateByCell.get(cellKey);
-
-      if (state === CellState.WALL_LOW) {
-        line += wallLowChar;
-      } else if (state === CellState.WALL_HIGH) {
-        line += wallHighChar;
-      } else {
-        line += openChar;
-      }
+    if (chosen === CELL_STATES.OPEN) {
+      delete next.stateByCell[cellKey];
+    } else if (chosen === CELL_STATES.WALL_LOW || chosen === CELL_STATES.WALL_HIGH) {
+      next.stateByCell[cellKey] = chosen;
     }
-
-    lines.push(line);
   }
 
-  return lines.join("\n");
+  next.stateByCell = normalizeStateByCell(arena, next.stateByCell);
+  return next;
 }
 
-export function printMazeAscii(maze, options = {}) {
-  console.log(formatMazeAscii(maze, options));
-}
-
-export function cloneMaze(maze) {
+export function serializeState(currentState) {
   return {
-    shape: maze.shape,
-    width: maze.width,
-    height: maze.height,
-    activeCells: new Set(maze.activeCells),
-    stateByCell: new Map(maze.stateByCell),
-    meta: { ...maze.meta },
+    stateByCell: Object.fromEntries(
+      sortEntriesByRowThenCol(Object.entries(cloneStateByCell(currentState.stateByCell)))
+    )
   };
 }
 
-export function shuffleMazeCells(maze, options = {}) {
-  const {
-    seed,
-    minChangeChance = 0,
-    maxChangeChance = 25,
-  } = options;
+export function createEngine(rawArena, rawPresets = {}) {
+  const arena = createArena(rawArena);
+  const presets = createPresets(rawPresets);
+  const strategies = createStrategies(presets);
+  const currentState = createEmptyState();
 
-  if (minChangeChance < 0 || minChangeChance > 100 || maxChangeChance < 0 || maxChangeChance > 100) {
-    throw new Error("Change chances must be between 0 and 100");
-  }
-
-  if (maxChangeChance < minChangeChance) {
-    throw new Error("maxChangeChance must be >= minChangeChance");
-  }
-
-  const rng = createRng(seed);
-  const shuffled = cloneMaze(maze);
-  const changeChance = randomInt(minChangeChance, maxChangeChance, rng);
-
-  for (const cellKey of shuffled.activeCells) {
-    const currentState = shuffled.stateByCell.get(cellKey);
-    const roll = rng() * 100;
-
-    if (roll >= changeChance) continue;
-
-    const alternateStates = getAlternateStates(currentState);
-    const nextState = pickRandom(alternateStates, rng);
-    shuffled.stateByCell.set(cellKey, nextState);
-  }
-
-  shuffled.meta = {
-    ...shuffled.meta,
-    lastShuffleChance: changeChance,
-    lastShuffleSeed: typeof seed === "number" ? seed : null,
-    minChangeChance,
-    maxChangeChance,
+  return {
+    arena,
+    presets,
+    strategies,
+    currentState
   };
-
-  return shuffled;
-}
-
-export function shuffleMazeFromSpec(spec = {}) {
-  return buildMazeFromSpec(spec);
 }

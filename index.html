@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Boss Maze Harness</title>
+  <style>
+    body {
+      background: #111;
+      color: #eee;
+      font-family: Arial, sans-serif;
+      margin: 12px;
+    }
+
+    h2 {
+      margin: 0 0 12px 0;
+    }
+
+    #controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    #controls button,
+    #controls select,
+    #controls label {
+      font-size: 14px;
+    }
+
+    #arena {
+      position: relative;
+      width: 1000px;
+      height: 1000px;
+      border: 1px solid #555;
+      background: #000;
+      overflow: hidden;
+    }
+
+    #arena img.bg {
+      position: absolute;
+      inset: 0;
+      width: 1000px;
+      height: 1000px;
+      z-index: 0;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    #arena img.tile {
+      position: absolute;
+      z-index: 2;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    #arena .cell {
+      position: absolute;
+      width: 50px;
+      height: 50px;
+      z-index: 3;
+      cursor: pointer;
+      box-sizing: border-box;
+    }
+
+    #arena.show-click-layer .cell {
+      outline: 1px solid rgba(80, 255, 80, 0.18);
+      background: rgba(80, 255, 80, 0.04);
+    }
+
+    #arena.show-click-layer .cell.column-cell {
+      outline: 1px solid rgba(80, 160, 255, 0.28);
+      background: rgba(80, 160, 255, 0.08);
+      cursor: default;
+    }
+
+    pre {
+      margin-top: 12px;
+      padding: 12px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      color: #ddd;
+      width: 1000px;
+      overflow: auto;
+      max-height: 300px;
+    }
+  </style>
+</head>
+<body>
+  <h2>Boss Maze Harness</h2>
+
+  <div id="controls">
+    <label for="preset-select">Preset:</label>
+    <select id="preset-select"></select>
+    <button id="build">Build</button>
+    <button id="shuffle">Shuffle</button>
+    <button id="clear">Clear</button>
+    <button id="export">Export JSON</button>
+    <button id="turn-prev">Turn -</button>
+    <span>Turn: <span id="turn-value">0</span></span>
+    <button id="turn-next">Turn +</button>
+    <button id="turn-reset">Turn Reset</button>
+    <label>
+      <input type="checkbox" id="toggle-click-layer" checked />
+      Show click layer
+    </label>
+  </div>
+
+  <div id="arena" class="show-click-layer">
+    <img class="bg" src="./boss-maze/assets/HeraldsPlayground1.png" alt="Arena Background" />
+  </div>
+
+  <pre id="output"></pre>
+
+  <script type="module" src="./harness.js"></script>
+</body>
+</html>
