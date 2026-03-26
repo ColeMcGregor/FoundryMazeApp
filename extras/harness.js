@@ -1,4 +1,4 @@
-import * as Maze from "./boss-maze/scripts/maze.js";
+import * as Maze from "../boss-maze/scripts/maze.js";
 
 const CELL_SIZE = 50;
 
