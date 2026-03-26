@@ -404,9 +404,16 @@ function createControls() {
     clearState();
   });
 
+  const commitBtn = document.createElement("button");
+  commitBtn.textContent = "Commit";
+  commitBtn.addEventListener("click", async () => {
+    await commitToScene();
+    });
+
   buttonRow1.appendChild(buildBtn);
   buttonRow1.appendChild(shuffleBtn);
   buttonRow1.appendChild(clearBtn);
+  buttonRow1.appendChild(commitBtn);
   container.appendChild(buttonRow1);
 
   const clickRow = document.createElement("label");
@@ -534,9 +541,9 @@ export async function initialize(mazeApi) {
   runtime.currentState = mazeApi.createState();
   runtime.currentTurn = 0;
 
-  const strategyNames = getOrderedStrategyNames();
-  runtime.selectedStrategyName = strategyNames[0] ?? null;
-  runtime.lastBuiltStrategyName = null;
+    const strategyNames = runtime.mazeApi.getStrategyNames(runtime.strategies);
+    runtime.selectedStrategyName = strategyNames[0] ?? null;
+    runtime.lastBuiltStrategyName = null;
 
   if (!runtime.hooksRegistered) {
     Hooks.on("canvasReady", () => {
@@ -726,4 +733,75 @@ export function registerStrategy(name, strategy, options = {}) {
 // Exposes module file paths for debugging or future rendering work
 export function getPaths() {
   return { ...PATHS };
+}
+
+export async function commitToScene() {
+  requireInitialized();
+
+  if (!canvas?.scene) {
+    throw new Error("No active scene.");
+  }
+
+  const scene = canvas.scene;
+  const gridSize = getGridSize();
+
+  // 1. Delete existing maze tiles
+  const existingTiles = scene.tiles.filter(t =>
+    t.flags?.["boss-maze"]?.isMazeTile
+  );
+
+  if (existingTiles.length > 0) {
+    await scene.deleteEmbeddedDocuments(
+      "Tile",
+      existingTiles.map(t => t.id)
+    );
+  }
+
+  // 2. Build new tiles
+  const tileData = [];
+
+  for (const cellKey of runtime.arena.allowedCells) {
+    const [x, y] = parseKey(cellKey);
+
+    let texturePath = null;
+
+    // Columns
+    if (runtime.arena.columnCells.has(cellKey)) {
+      texturePath = PATHS.assets.column;
+    } else {
+      const value = runtime.currentState.stateByCell[cellKey];
+
+      if (value === runtime.mazeApi.CELL_STATES.WALL_LOW) {
+        texturePath = PATHS.assets.low;
+      } else if (value === runtime.mazeApi.CELL_STATES.WALL_HIGH) {
+        texturePath = PATHS.assets.high;
+      }
+    }
+
+    if (!texturePath) continue;
+
+    tileData.push({
+      texture: { src: texturePath },
+      x: x * gridSize,
+      y: y * gridSize,
+      width: gridSize,
+      height: gridSize,
+
+      // ensures proper layering
+      z: 100,
+
+      flags: {
+        "boss-maze": {
+          isMazeTile: true
+        }
+      }
+    });
+  }
+
+  // 3. Create tiles in scene (visible to all players)
+  if (tileData.length > 0) {
+    await scene.createEmbeddedDocuments("Tile", tileData);
+  }
+
+  ui.notifications.info("Boss Maze committed to scene.");
 }
