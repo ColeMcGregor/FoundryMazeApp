@@ -745,7 +745,7 @@ export async function commitToScene() {
   const scene = canvas.scene;
   const gridSize = getGridSize();
 
-  // 1. Delete existing maze tiles
+  // 1. Delete existing maze tiles created by this module
   const existingTiles = scene.tiles.filter(t =>
     t.flags?.["boss-maze"]?.isMazeTile
   );
@@ -757,38 +757,46 @@ export async function commitToScene() {
     );
   }
 
-  // 2. Build new tiles
+  // 2. Build new tile documents using the same bottom-aligned math as PIXI
   const tileData = [];
 
   for (const cellKey of runtime.arena.allowedCells) {
     const [x, y] = parseKey(cellKey);
 
     let texturePath = null;
+    let texture = null;
 
-    // Columns
     if (runtime.arena.columnCells.has(cellKey)) {
       texturePath = PATHS.assets.column;
+      texture = runtime.textures.column;
     } else {
       const value = runtime.currentState.stateByCell[cellKey];
 
       if (value === runtime.mazeApi.CELL_STATES.WALL_LOW) {
         texturePath = PATHS.assets.low;
+        texture = runtime.textures.low;
       } else if (value === runtime.mazeApi.CELL_STATES.WALL_HIGH) {
         texturePath = PATHS.assets.high;
+        texture = runtime.textures.high;
       }
     }
 
-    if (!texturePath) continue;
+    if (!texturePath || !texture) continue;
+
+    const scale = gridSize / texture.width;
+    const scaledWidth = gridSize;
+    const scaledHeight = texture.height * scale;
 
     tileData.push({
       texture: { src: texturePath },
-      x: x * gridSize,
-      y: y * gridSize,
-      width: gridSize,
-      height: gridSize,
 
-      // ensures proper layering
-      z: 100,
+      x: x * gridSize,
+      y: y * gridSize + (gridSize - scaledHeight),
+
+      width: scaledWidth,
+      height: scaledHeight,
+
+      z: Math.round(y * gridSize + (gridSize - scaledHeight)),
 
       flags: {
         "boss-maze": {
@@ -798,7 +806,6 @@ export async function commitToScene() {
     });
   }
 
-  // 3. Create tiles in scene (visible to all players)
   if (tileData.length > 0) {
     await scene.createEmbeddedDocuments("Tile", tileData);
   }
