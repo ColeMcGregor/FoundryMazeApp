@@ -1,17 +1,26 @@
+// Core maze engine:
+// - Defines arena structure (allowed + column cells)
+// - Manages sparse cell state (only non-open cells stored)
+// - Provides deterministic math strategies (sunburst, ripple)
+// - Provides preset strategies and bounded shuffle
+
 export const CELL_STATES = Object.freeze({
   OPEN: 0,
   WALL_LOW: 1,
-  WALL_HIGH: 2
+  WALL_HIGH: 2,
+  PIT: 3
 });
 
 const STORED_STATES = new Set([
   CELL_STATES.WALL_LOW,
-  CELL_STATES.WALL_HIGH
+  CELL_STATES.WALL_HIGH,
+  CELL_STATES.PIT
 ]);
 
 const TAU = Math.PI * 2;
 
 // ---------- BASIC HELPERS ----------
+// Utility functions for cloning, key parsing, sorting, math, and deterministic hashing
 
 function cloneStateByCell(stateByCell = {}) {
   return { ...stateByCell };
@@ -34,22 +43,25 @@ function sortEntriesByRowThenCol(entries) {
   });
 }
 
+// Normalizes angle to [0, 2π)
 function normalizeAngle(angle) {
   let out = angle % TAU;
   if (out < 0) out += TAU;
   return out;
 }
 
+// Smallest angular distance between two angles
 function angularDistance(a, b) {
   const diff = Math.abs(normalizeAngle(a) - normalizeAngle(b));
   return Math.min(diff, TAU - diff);
 }
 
+// Safe modulo for negative numbers
 function mod(n, m) {
   return ((n % m) + m) % m;
 }
 
-// Simple deterministic hash -> [0, 1)
+// Stable hash → [0,1) for deterministic pseudo-random behavior
 function hashToUnitInterval(input) {
   let hash = 2166136261;
 
@@ -58,15 +70,16 @@ function hashToUnitInterval(input) {
     hash = Math.imul(hash, 16777619);
   }
 
-  // Force unsigned 32-bit, then normalize
   return (hash >>> 0) / 4294967295;
 }
 
+// Assigns low/high wall deterministically per cell + turn
 function deterministicWallHeight(patternName, x, y, turn) {
   const roll = hashToUnitInterval(`${patternName}|${x}|${y}|${turn}`);
   return roll < 0.5 ? CELL_STATES.WALL_LOW : CELL_STATES.WALL_HIGH;
 }
 
+// Converts cell index to center point
 function getCellCenter(x, y) {
   return {
     px: x + 0.5,
@@ -74,6 +87,7 @@ function getCellCenter(x, y) {
   };
 }
 
+// Computes polar coordinates relative to arena center
 // Uses standard mathematical orientation:
 // +x right, +y up, angle increases counterclockwise
 function getPolarFromArenaCenter(x, y, cx = 9.5, cy = 9.5) {
@@ -86,7 +100,9 @@ function getPolarFromArenaCenter(x, y, cx = 9.5, cy = 9.5) {
 }
 
 // ---------- NORMALIZATION ----------
+// Sanitizes raw input data into valid arena/preset/state structures
 
+// Filters allowed + column cells
 function normalizeArena(rawArena = {}) {
   const allowedCells = new Set(Array.isArray(rawArena.allowedCells) ? rawArena.allowedCells : []);
   const rawColumnCells = Array.isArray(rawArena.columnCells) ? rawArena.columnCells : [];
@@ -106,6 +122,7 @@ function normalizeArena(rawArena = {}) {
   return arena;
 }
 
+// Ensures state only contains valid, mutable cells
 function normalizeStateByCell(arena, rawStateByCell = {}) {
   const next = {};
 
@@ -120,6 +137,7 @@ function normalizeStateByCell(arena, rawStateByCell = {}) {
   return Object.fromEntries(sortEntriesByRowThenCol(Object.entries(next)));
 }
 
+// Extracts preset map from raw JSON
 function normalizePresets(rawPresets = {}) {
   const maybePresets = rawPresets.presets && typeof rawPresets.presets === "object"
     ? rawPresets.presets
@@ -141,19 +159,23 @@ function normalizePresets(rawPresets = {}) {
 }
 
 // ---------- STATE ----------
+// State creation, cloning, and safe accessors
 
+// Creates empty sparse state
 function createEmptyState() {
   return {
     stateByCell: {}
   };
 }
 
+// Deep clone of state object
 function cloneState(state = {}) {
   return {
     stateByCell: cloneStateByCell(state.stateByCell)
   };
 }
 
+// Returns stored state or OPEN
 function getCellState(currentState, cellKey) {
   return currentState.stateByCell[cellKey] ?? CELL_STATES.OPEN;
 }
@@ -170,6 +192,7 @@ function isMutableCell(arena, cellKey) {
   return isAllowedCell(arena, cellKey) && !isColumnCell(arena, cellKey);
 }
 
+// Ensures strategy output is valid and normalized
 function validateStrategyResult(arena, result) {
   if (!result || typeof result !== "object") {
     return createEmptyState();
@@ -181,7 +204,9 @@ function validateStrategyResult(arena, result) {
 }
 
 // ---------- STRATEGIES ----------
+// Strategy definitions: presets and math-based generators
 
+// Uses preset JSON to build state
 function buildPresetStrategy(presetName) {
   return {
     randomEligible: false,
@@ -198,6 +223,7 @@ function buildPresetStrategy(presetName) {
   };
 }
 
+// Rotating angular spoke pattern, deterministic per turn
 function buildRotatingSunburstStrategy({
   spokeCount = 8,
   step = Math.PI / 16,
@@ -228,7 +254,7 @@ function buildRotatingSunburstStrategy({
         let active = false;
 
         for (const baseAngle of baseSpokeAngles) {
-          const spokeAngle = normalizeAngle(baseAngle + phase); // counterclockwise rotation
+          const spokeAngle = normalizeAngle(baseAngle + phase);
           if (angularDistance(angle, spokeAngle) <= halfWidth) {
             active = true;
             break;
@@ -245,6 +271,7 @@ function buildRotatingSunburstStrategy({
   };
 }
 
+// Outward-moving ring pattern with spacing
 function buildRippleStrategy({
   spacing = 3,
   centerExclusionRadius = 0,
@@ -278,6 +305,7 @@ function buildRippleStrategy({
 }
 
 // ---------- RANDOM / GENERIC HELPERS ----------
+// Shared helpers for shuffle and random strategy selection
 
 function randomChoice(items) {
   if (!Array.isArray(items) || items.length === 0) return null;
@@ -300,21 +328,26 @@ function randomEligibleStrategyNames(strategies) {
 }
 
 // ---------- PUBLIC API ----------
+// External interface used by harness and Foundry module
 
+// Creates normalized arena from raw JSON
 export function createArena(rawArena) {
   return normalizeArena(rawArena);
 }
 
+// Creates normalized preset map
 export function createPresets(rawPresets) {
   return normalizePresets(rawPresets);
 }
 
+// Creates initial state
 export function createState(rawState = {}) {
   return {
     stateByCell: cloneStateByCell(rawState.stateByCell)
   };
 }
 
+// Builds context passed into strategies
 export function createContext({ arena, currentState, presets, turn = 0 }) {
   return {
     arena,
@@ -324,6 +357,7 @@ export function createContext({ arena, currentState, presets, turn = 0 }) {
   };
 }
 
+// Registers all strategies (presets + math)
 export function createStrategies(presets = {}) {
   const strategies = {};
 
@@ -337,6 +371,7 @@ export function createStrategies(presets = {}) {
   return strategies;
 }
 
+// Adds custom strategy at runtime
 export function registerStrategy(strategies, name, strategy, { overwrite = false } = {}) {
   if (!strategies || typeof strategies !== "object") return false;
   if (typeof name !== "string" || !name.trim()) return false;
@@ -351,14 +386,17 @@ export function registerStrategy(strategies, name, strategy, { overwrite = false
   return true;
 }
 
+// Returns available strategy names
 export function getStrategyNames(strategies) {
   return Object.keys(strategies ?? {});
 }
 
+// Returns state at x,y
 export function getCell(currentState, x, y) {
   return getCellState(currentState, keyFromXY(x, y));
 }
 
+// Sets a cell safely (respecting arena + column rules)
 export function setCell(arena, currentState, x, y, newValue) {
   const cellKey = keyFromXY(x, y);
   if (!isMutableCell(arena, cellKey)) return cloneState(currentState);
@@ -375,27 +413,43 @@ export function setCell(arena, currentState, x, y, newValue) {
   return next;
 }
 
-export function cycleCell(arena, currentState, x, y) {
+// Cycles OPEN → LOW → HIGH → OPEN, or OPEN → LOW → HIGH → PIT → OPEN
+export function cycleCell(arena, currentState, x, y, options = {}) {
+  const { includePit = false } = options;
+
   const cellKey = keyFromXY(x, y);
   if (!isMutableCell(arena, cellKey)) return cloneState(currentState);
 
   const current = getCellState(currentState, cellKey);
 
+  if (!includePit) {
+    if (current === CELL_STATES.OPEN) {
+      return setCell(arena, currentState, x, y, CELL_STATES.WALL_LOW);
+    }
+    if (current === CELL_STATES.WALL_LOW) {
+      return setCell(arena, currentState, x, y, CELL_STATES.WALL_HIGH);
+    }
+    return setCell(arena, currentState, x, y, CELL_STATES.OPEN);
+  }
+
   if (current === CELL_STATES.OPEN) {
     return setCell(arena, currentState, x, y, CELL_STATES.WALL_LOW);
   }
-
   if (current === CELL_STATES.WALL_LOW) {
     return setCell(arena, currentState, x, y, CELL_STATES.WALL_HIGH);
   }
-
+  if (current === CELL_STATES.WALL_HIGH) {
+    return setCell(arena, currentState, x, y, CELL_STATES.PIT);
+  }
   return setCell(arena, currentState, x, y, CELL_STATES.OPEN);
 }
 
+// Clears all state
 export function clearState() {
   return createEmptyState();
 }
 
+// Applies a strategy (or random eligible one)
 export function build({ arena, currentState, presets, strategies, turn = 0 }, strategyName) {
   if (!strategies || typeof strategies !== "object") {
     return cloneState(currentState);
@@ -420,6 +474,7 @@ export function build({ arena, currentState, presets, strategies, turn = 0 }, st
   return validateStrategyResult(arena, result);
 }
 
+// Bounded random mutation of current state
 export function shuffle(arena, currentState) {
   const next = cloneState(currentState);
   const mutableCellKeys = getMutableCellKeys(arena);
@@ -437,7 +492,10 @@ export function shuffle(arena, currentState) {
 
     if (chosen === CELL_STATES.OPEN) {
       delete next.stateByCell[cellKey];
-    } else if (chosen === CELL_STATES.WALL_LOW || chosen === CELL_STATES.WALL_HIGH) {
+    } else if (
+      chosen === CELL_STATES.WALL_LOW ||
+      chosen === CELL_STATES.WALL_HIGH
+    ) {
       next.stateByCell[cellKey] = chosen;
     }
   }
@@ -446,6 +504,7 @@ export function shuffle(arena, currentState) {
   return next;
 }
 
+// Returns stable sorted JSON representation
 export function serializeState(currentState) {
   return {
     stateByCell: Object.fromEntries(
@@ -454,6 +513,7 @@ export function serializeState(currentState) {
   };
 }
 
+// Creates full engine bundle (arena + presets + strategies + state)
 export function createEngine(rawArena, rawPresets = {}) {
   const arena = createArena(rawArena);
   const presets = createPresets(rawPresets);

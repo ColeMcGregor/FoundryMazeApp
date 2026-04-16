@@ -2,8 +2,8 @@
 // - Loads arena + presets from module JSON
 // - Maintains current maze state and turn
 // - Renders current state onto the active canvas using module assets
-// - Provides a small DOM control panel matching the harness workflow
-// - Uses client-side overlay only (safe, non-persistent)
+// - Provides a draggable DOM control panel matching the harness workflow
+// - Uses client-side overlay for editing and tile commit for player-visible state
 
 const MODULE_ID = "boss-maze";
 
@@ -14,7 +14,8 @@ const PATHS = {
   assets: {
     column: `modules/${MODULE_ID}/assets/Column.png`,
     low: `modules/${MODULE_ID}/assets/ShortWall.png`,
-    high: `modules/${MODULE_ID}/assets/TallWall.png`
+    high: `modules/${MODULE_ID}/assets/TallWall.png`,
+    pit: `modules/${MODULE_ID}/assets/BloodPit.png`
   }
 };
 
@@ -41,7 +42,8 @@ const runtime = {
   textures: {
     column: null,
     low: null,
-    high: null
+    high: null,
+    pit: null
   },
 
   overlayRoot: null,
@@ -49,7 +51,8 @@ const runtime = {
   clickLayer: null,
 
   controlsElement: null,
-  clickLayerVisible: true
+  clickLayerVisible: true,
+  pitModeEnabled: false
 };
 
 // Loads JSON from a module path
@@ -113,6 +116,42 @@ function setSelectedStrategyName(name) {
   if (select) {
     select.value = name ?? "";
   }
+}
+
+// Makes a fixed-position DOM element draggable by a handle
+function makeElementDraggable(element, handle = element) {
+  let dragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  handle.style.cursor = "move";
+
+  const onMouseMove = (event) => {
+    if (!dragging) return;
+
+    element.style.left = `${event.clientX - offsetX}px`;
+    element.style.top = `${event.clientY - offsetY}px`;
+    element.style.right = "auto";
+  };
+
+  const onMouseUp = () => {
+    dragging = false;
+    window.removeEventListener("mousemove", onMouseMove);
+    window.removeEventListener("mouseup", onMouseUp);
+  };
+
+  handle.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+
+    dragging = true;
+
+    const rect = element.getBoundingClientRect();
+    offsetX = event.clientX - rect.left;
+    offsetY = event.clientY - rect.top;
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  });
 }
 
 // Ensures overlay containers exist on the active canvas
@@ -195,7 +234,6 @@ function createClickCell(cellKey) {
   g.cursor = runtime.arena.columnCells.has(cellKey) ? "default" : "pointer";
   g.hitArea = new PIXI.Rectangle(0, 0, gridSize, gridSize);
 
-  // Optional visible click layer for editing/debugging
   if (runtime.clickLayerVisible) {
     if (runtime.arena.columnCells.has(cellKey)) {
       g.lineStyle(1, 0x4da3ff, 0.35);
@@ -285,6 +323,11 @@ function refreshControls() {
   if (clickToggle) {
     clickToggle.checked = runtime.clickLayerVisible;
   }
+
+  const pitToggle = document.getElementById("boss-maze-pit-toggle");
+  if (pitToggle) {
+    pitToggle.checked = runtime.pitModeEnabled;
+  }
 }
 
 // Builds/updates the control panel DOM
@@ -296,7 +339,8 @@ function createControls() {
   container.id = "boss-maze-controls";
   container.style.position = "fixed";
   container.style.top = "120px";
-  container.style.right = "20px";
+  container.style.left = "20px";
+  container.style.right = "auto";
   container.style.zIndex = "10000";
   container.style.display = "flex";
   container.style.flexDirection = "column";
@@ -313,6 +357,8 @@ function createControls() {
   title.textContent = "Boss Maze";
   title.style.fontWeight = "700";
   title.style.marginBottom = "4px";
+  title.style.paddingBottom = "4px";
+  title.style.borderBottom = "1px solid #444";
   container.appendChild(title);
 
   const strategyRow = document.createElement("div");
@@ -385,6 +431,7 @@ function createControls() {
   const buttonRow1 = document.createElement("div");
   buttonRow1.style.display = "flex";
   buttonRow1.style.gap = "6px";
+  buttonRow1.style.flexWrap = "wrap";
 
   const buildBtn = document.createElement("button");
   buildBtn.textContent = "Build";
@@ -408,7 +455,7 @@ function createControls() {
   commitBtn.textContent = "Commit";
   commitBtn.addEventListener("click", async () => {
     await commitToScene();
-    });
+  });
 
   buttonRow1.appendChild(buildBtn);
   buttonRow1.appendChild(shuffleBtn);
@@ -438,6 +485,27 @@ function createControls() {
   clickRow.appendChild(clickText);
   container.appendChild(clickRow);
 
+  const pitRow = document.createElement("label");
+  pitRow.style.display = "flex";
+  pitRow.style.alignItems = "center";
+  pitRow.style.gap = "6px";
+
+  const pitToggle = document.createElement("input");
+  pitToggle.type = "checkbox";
+  pitToggle.id = "boss-maze-pit-toggle";
+  pitToggle.checked = runtime.pitModeEnabled;
+  pitToggle.addEventListener("change", () => {
+    runtime.pitModeEnabled = pitToggle.checked;
+    refreshControls();
+  });
+
+  const pitText = document.createElement("span");
+  pitText.textContent = "Enable Blood Pits";
+
+  pitRow.appendChild(pitToggle);
+  pitRow.appendChild(pitText);
+  container.appendChild(pitRow);
+
   const closeBtn = document.createElement("button");
   closeBtn.textContent = "Close";
   closeBtn.addEventListener("click", () => {
@@ -448,6 +516,7 @@ function createControls() {
   document.body.appendChild(container);
   runtime.controlsElement = container;
 
+  makeElementDraggable(container, title);
   refreshControls();
 }
 
@@ -459,7 +528,7 @@ function destroyControls() {
   runtime.controlsElement = null;
 }
 
-// Renders columns, walls, and click layer onto the active canvas
+// Renders pits, columns, walls, and click layer onto the active canvas
 export function renderOverlay() {
   requireInitialized();
   ensureOverlay();
@@ -467,7 +536,18 @@ export function renderOverlay() {
   runtime.spriteLayer.removeChildren().forEach((child) => child.destroy?.());
   runtime.clickLayer.removeChildren().forEach((child) => child.destroy?.());
 
-  // Render columns and wall cells
+  // Render pits first (bottom layer)
+  for (const cellKey of runtime.arena.allowedCells) {
+    const value = runtime.currentState.stateByCell[cellKey];
+    if (value !== runtime.mazeApi.CELL_STATES.PIT) continue;
+
+    const [x, y] = parseKey(cellKey);
+    const sprite = createSpriteForCell(runtime.textures.pit, x, y);
+    sprite.zIndex = 0;
+    runtime.spriteLayer.addChild(sprite);
+  }
+
+  // Render columns and wall cells above pits
   for (const cellKey of runtime.arena.allowedCells) {
     const [x, y] = parseKey(cellKey);
 
@@ -534,6 +614,7 @@ export async function initialize(mazeApi) {
   runtime.textures.column = await loadTextureSafe(PATHS.assets.column);
   runtime.textures.low = await loadTextureSafe(PATHS.assets.low);
   runtime.textures.high = await loadTextureSafe(PATHS.assets.high);
+  runtime.textures.pit = await loadTextureSafe(PATHS.assets.pit);
 
   runtime.arena = mazeApi.createArena(runtime.rawArena);
   runtime.presets = mazeApi.createPresets(runtime.rawPresets);
@@ -541,9 +622,9 @@ export async function initialize(mazeApi) {
   runtime.currentState = mazeApi.createState();
   runtime.currentTurn = 0;
 
-    const strategyNames = runtime.mazeApi.getStrategyNames(runtime.strategies);
-    runtime.selectedStrategyName = strategyNames[0] ?? null;
-    runtime.lastBuiltStrategyName = null;
+  const strategyNames = runtime.mazeApi.getStrategyNames(runtime.strategies);
+  runtime.selectedStrategyName = strategyNames[0] ?? null;
+  runtime.lastBuiltStrategyName = null;
 
   if (!runtime.hooksRegistered) {
     Hooks.on("canvasReady", () => {
@@ -571,6 +652,7 @@ export function getRuntime() {
     currentTurn: runtime.currentTurn,
     selectedStrategyName: runtime.selectedStrategyName,
     lastBuiltStrategyName: runtime.lastBuiltStrategyName,
+    pitModeEnabled: runtime.pitModeEnabled,
     rawArena: cloneSerializable(runtime.rawArena),
     rawPresets: cloneSerializable(runtime.rawPresets),
 
@@ -693,7 +775,8 @@ export function cycleCell(x, y) {
     runtime.arena,
     runtime.currentState,
     x,
-    y
+    y,
+    { includePit: runtime.pitModeEnabled }
   );
 
   if (runtime.controlsElement) {
@@ -735,6 +818,7 @@ export function getPaths() {
   return { ...PATHS };
 }
 
+// Commits current maze state to the scene as Foundry Tile documents
 export async function commitToScene() {
   requireInitialized();
 
@@ -745,7 +829,7 @@ export async function commitToScene() {
   const scene = canvas.scene;
   const gridSize = getGridSize();
 
-  // 1. Delete existing maze tiles created by this module
+  // Delete existing maze tiles created by this module
   const existingTiles = scene.tiles.filter(t =>
     t.flags?.["boss-maze"]?.isMazeTile
   );
@@ -757,7 +841,7 @@ export async function commitToScene() {
     );
   }
 
-  // 2. Build new tile documents using the same bottom-aligned math as PIXI
+  // Build new tile documents using the same bottom-aligned math as PIXI
   const tileData = [];
 
   for (const cellKey of runtime.arena.allowedCells) {
@@ -765,14 +849,18 @@ export async function commitToScene() {
 
     let texturePath = null;
     let texture = null;
+    let value = null;
 
     if (runtime.arena.columnCells.has(cellKey)) {
       texturePath = PATHS.assets.column;
       texture = runtime.textures.column;
     } else {
-      const value = runtime.currentState.stateByCell[cellKey];
+      value = runtime.currentState.stateByCell[cellKey];
 
-      if (value === runtime.mazeApi.CELL_STATES.WALL_LOW) {
+      if (value === runtime.mazeApi.CELL_STATES.PIT) {
+        texturePath = PATHS.assets.pit;
+        texture = runtime.textures.pit;
+      } else if (value === runtime.mazeApi.CELL_STATES.WALL_LOW) {
         texturePath = PATHS.assets.low;
         texture = runtime.textures.low;
       } else if (value === runtime.mazeApi.CELL_STATES.WALL_HIGH) {
@@ -796,7 +884,9 @@ export async function commitToScene() {
       width: scaledWidth,
       height: scaledHeight,
 
-      z: Math.round(y * gridSize + (gridSize - scaledHeight)),
+      z: value === runtime.mazeApi.CELL_STATES.PIT
+        ? 0
+        : Math.round(y * gridSize + (gridSize - scaledHeight)),
 
       flags: {
         "boss-maze": {
